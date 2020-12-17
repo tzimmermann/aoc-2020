@@ -8,10 +8,22 @@ type Interval = {
 type Rule = {
   name: string
   validIntervals: Interval[]
+  fieldIndex: number
 }
 
 type Ticket = {
   numbers: number[]
+}
+
+type Field = {
+  index: number
+  values: number[]
+  candidateRules: Rule[]
+}
+
+type ErrorRate = {
+  hasErrors: boolean
+  invalidSum: number
 }
 
 readFile("16/input.txt", "utf8", (err, data) => {
@@ -25,75 +37,110 @@ readFile("16/input.txt", "utf8", (err, data) => {
     nearbyTicketDefinitions,
   ] = data.split("\n\n")
   const rules = parseRules(ruleDefinitons)
-  const myTicket = parseTickets(myTicketDefinition)
+  const [myTicket] = parseTickets(myTicketDefinition)
   const nearbyTickets = parseTickets(nearbyTicketDefinitions)
 
-  const nearbyErrorRate = computeErrorRate(rules, nearbyTickets)
-  // console.log("nearbyTickets", nearbyTickets)
-  console.log("part 1 result", nearbyErrorRate)
+  const { invalidSum } = computeErrorRate(rules, nearbyTickets)
+  console.log("part 1 result", invalidSum)
 
-  const validTickets = getValidTickets(rules, nearbyTickets)
-
-  const fieldCount = validTickets[0].numbers.length
-
-  const fields: number[][] = []
-  for (let fieldIndex = 0; fieldIndex < fieldCount; fieldIndex++) {
-    fields.push(validTickets.map((ticket) => ticket.numbers[fieldIndex]))
-  }
-
-  const fieldOrder: string[] = getFieldOrder(fields, rules)
-
-  console.log("fieldOrder:", fieldOrder)
+  const fields = initializeFields(nearbyTickets, rules)
+  mapRulesToFields(fields)
+  const departureSum = getDepartureTotal(myTicket, rules)
+  console.log("part 2 result:", departureSum)
 })
 
-const getFieldOrder = (fields: number[][], rules: Rule[]): string[] => {
-  const remainingRules = [...rules]
-  const orderedRuleNames: string[] = []
-  fields.forEach((field) => {
-    const matchingRule = remainingRules.find((rule) =>
-      field.every((fieldValue) =>
-        rule.validIntervals.some(
-          (interval) => interval.from <= fieldValue && fieldValue <= interval.to
-        )
-      )
-    )
-    if (matchingRule) {
-      console.log("matched", matchingRule)
-      remainingRules.splice(remainingRules.indexOf(matchingRule), 1)
-      orderedRuleNames.push(matchingRule.name)
-    } else {
-      console.log("No matching rule for field", field)
-    }
-  })
-  return orderedRuleNames
+const getDepartureTotal = (ticket: Ticket, rules: Rule[]): number => {
+  const fieldIndices = rules
+    .filter((rule) => rule.name.startsWith("departure"))
+    .map((rule) => rule.fieldIndex)
+
+  let departureTotal = 1
+  return fieldIndices.reduce(
+    (total, fieldIndex) => total * ticket.numbers[fieldIndex],
+    departureTotal
+  )
 }
 
-const getInvalidNumberSum = (ticket: Ticket, rules: Rule[]): number => {
-  const invalidSum = 0
-  return ticket.numbers.reduce((totalInvalid, ticketNumber) => {
+const mapRulesToFields = (fields: Field[]) => {
+  fields.sort(
+    (field1, field2) =>
+      field1.candidateRules.length - field2.candidateRules.length
+  )
+
+  let appliedRules: Rule[] = []
+  fields.forEach((field) => {
+    field.candidateRules = field.candidateRules.filter(
+      (candidate) => !appliedRules.includes(candidate)
+    )
+    if (field.candidateRules.length > 1) {
+      throw new Error("Ambiguous rule found")
+    }
+    const rule = field.candidateRules[0]
+    rule.fieldIndex = field.index
+    appliedRules.push(rule)
+  })
+}
+
+const initializeFields = (tickets: Ticket[], rules: Rule[]): Field[] => {
+  const validTickets = getValidTickets(rules, tickets)
+  const fieldCount = validTickets[0].numbers.length
+  const fields: Field[] = []
+  for (let fieldIndex = 0; fieldIndex < fieldCount; fieldIndex++) {
+    const field = {
+      index: fieldIndex,
+      values: validTickets.map((ticket) => ticket.numbers[fieldIndex]),
+      candidateRules: [],
+    }
+    field.candidateRules = getCandidatesForField(field, rules)
+    fields.push(field)
+  }
+  return fields
+}
+
+const getCandidatesForField = (field: Field, rules: Rule[]): Rule[] => {
+  return rules.filter((rule) =>
+    field.values.every((fieldValue) =>
+      rule.validIntervals.some(
+        (interval) => interval.from <= fieldValue && fieldValue <= interval.to
+      )
+    )
+  )
+}
+
+const getInvalidNumberSum = (ticket: Ticket, rules: Rule[]): ErrorRate => {
+  let invalidSum = 0
+  let hasErrors = false
+  ticket.numbers.forEach((ticketNumber) => {
     const matchesAnyRule = rules.some((rule) =>
       rule.validIntervals.some(
         (interval) =>
           interval.from <= ticketNumber && ticketNumber <= interval.to
       )
     )
-    return matchesAnyRule ? totalInvalid : totalInvalid + ticketNumber
-  }, invalidSum)
+    if (!matchesAnyRule) {
+      hasErrors = true
+      invalidSum += ticketNumber
+    }
+  })
+  return { hasErrors, invalidSum }
 }
 
 const getValidTickets = (rules: Rule[], tickets: Ticket[]): Ticket[] => {
   return tickets.filter((ticket) => {
-    const errorRate = computeErrorRate(rules, [ticket])
-    return errorRate === 0
+    const { hasErrors } = computeErrorRate(rules, [ticket])
+    return !hasErrors
   })
 }
 
-const computeErrorRate = (rules: Rule[], tickets: Ticket[]): number => {
-  let errorRate = 0
-  return tickets.reduce(
-    (totalErrors, ticket) => totalErrors + getInvalidNumberSum(ticket, rules),
-    errorRate
-  )
+const computeErrorRate = (rules: Rule[], tickets: Ticket[]): ErrorRate => {
+  let totalInvalidSum = 0
+  let hasAnyErrors = false
+  tickets.forEach((ticket) => {
+    const { hasErrors, invalidSum } = getInvalidNumberSum(ticket, rules)
+    hasAnyErrors = hasAnyErrors || hasErrors
+    totalInvalidSum += invalidSum
+  })
+  return { hasErrors: hasAnyErrors, invalidSum: totalInvalidSum }
 }
 
 const parseTickets = (ticketDefinitions: string): Ticket[] => {
@@ -128,6 +175,7 @@ const parseRules = (ruleDefinitons: string): Rule[] => {
         /([\w ]+): (\d+)-(\d+) or (\d+)-(\d+)/
       )
       rules.push({
+        fieldIndex: null,
         name,
         validIntervals: [
           {
